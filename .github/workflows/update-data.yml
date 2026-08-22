@@ -1,0 +1,41 @@
+name: 更新機捷時刻表資料
+
+# 每週一台灣時間03:00自動執行一次(UTC時間週日19:00),
+# 也可以到repo的Actions頁籤手動點「Run workflow」立即執行一次
+on:
+  schedule:
+    - cron: '0 19 * * 0'
+  workflow_dispatch:
+
+# 允許workflow把更新後的site-data.js commit回repo
+permissions:
+  contents: write
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取出repo內容
+        uses: actions/checkout@v4
+
+      - name: 安裝 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 向TDX抓取最新桃園捷運資料
+        env:
+          TDX_CLIENT_ID: ${{ secrets.TDX_CLIENT_ID }}
+          TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
+        run: node tdx-tymc-fetch.js
+
+      - name: 轉換成網頁可用的 site-data.js
+        run: node build-site-data.js
+
+      - name: 若資料有變動,commit並推送回repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add site-data.js
+          git diff --staged --quiet && echo "資料沒有變動,略過commit" || git commit -m "自動更新機捷時刻表資料 $(date -u +'%Y-%m-%d')"
+          git push
