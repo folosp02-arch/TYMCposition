@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>機場捷運 · 列車位置推算</title>
+<style>
+  :root{
+    --bg: #0a0e17;
+    --panel: #10161f;
+    --panel-2: #141c28;
+    --line: #1e2836;
+    --text: #dbe4ee;
+    --muted: #64748b;
+    --muted-2: #3c4a5e;
+    --local: #38bdf8;
+    --local-dim: #0e2a38;
+    --express: #c084fc;
+    --express-dim: #2a1f3d;
+    --down: #38bdf8;
+    --up: #fb923c;
+    --up-dim: #3a2412;
+    --amber: #f5b942;
+    --danger: #f0616d;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height:100vh;
+    padding: 16px 12px 50px;
+  }
+  .wrap{ max-width: 720px; margin: 0 auto; }
+
+  header{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    flex-wrap: wrap; gap: 10px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 14px; margin-bottom: 16px;
+  }
+  .title-block h1{
+    font-size: 17px; font-weight: 700; letter-spacing: 0.3px; color:#fff;
+  }
+  .title-block .sub{
+    font-size: 11.5px; color: var(--muted); margin-top: 4px; letter-spacing: 0.3px;
+  }
+  .clock{
+    text-align:right;
+    font-family: var(--mono);
+  }
+  .clock .time{ font-size: 22px; font-weight:600; color: var(--amber); letter-spacing:1px;}
+  .clock .status{ font-size:11px; color: var(--muted); margin-top:2px;}
+  .clock .status.on{ color:#4ade80; }
+  .clock .status.off{ color: var(--danger); }
+
+  .disclaimer{
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--amber);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 18px;
+  }
+  .disclaimer b{ color: var(--amber); font-weight:600; }
+
+  .legend{
+    display:flex; gap:14px; flex-wrap:wrap; margin-bottom: 16px;
+    font-size: 11.5px; color: var(--muted);
+  }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .dot{ width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .dot.local{ background: var(--local); box-shadow:0 0 6px var(--local); }
+  .dot.express{ background: var(--express); box-shadow:0 0 6px var(--express); }
+  .swatch{ width:14px; height:3px; border-radius:2px; display:inline-block; }
+  .swatch.down{ background: var(--down); }
+  .swatch.up{ background: var(--up); }
+
+  .panel{
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 18px 14px 14px;
+    margin-bottom: 18px;
+  }
+  .panel h2{
+    font-size: 11.5px; color: var(--muted); font-weight:600;
+    letter-spacing: 1px; text-transform: uppercase; margin-bottom: 14px;
+  }
+
+  #trackSvg{ width: 100%; display:block; }
+  .station-code{ font-family: var(--mono); font-size: 11px; font-weight:600; fill: var(--text); }
+  .station-name{ font-size: 10.5px; fill: #93a4bb; }
+  .station-dot{ fill: var(--panel); stroke: var(--muted-2); stroke-width: 2px; }
+  .station-dot.hub{ stroke: var(--amber); }
+  .track-rail{ stroke-width: 4px; fill:none; }
+  .dir-label{ font-size: 10px; font-weight:700; letter-spacing:0.5px; }
+
+  /* ---- 桌面/寬螢幕表格 ---- */
+  table{ width:100%; border-collapse: collapse; font-size: 13px; }
+  th{
+    text-align:left; font-size:10.5px; color: var(--muted); font-weight:600;
+    letter-spacing:0.5px; text-transform:uppercase;
+    padding: 8px 8px; border-bottom: 1px solid var(--line);
+  }
+  td{ padding: 10px 8px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px;}
+  tr:last-child td{ border-bottom:none; }
+  .badge{
+    display:inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight:600; font-family: var(--sans);
+  }
+  .badge.local{ background: var(--local-dim); color: var(--local); }
+  .badge.express{ background: var(--express-dim); color: var(--express); }
+  .badge.dir-down{ background: rgba(56,189,248,0.12); color: var(--down); }
+  .badge.dir-up{ background: var(--up-dim); color: var(--up); }
+  .dir{ color: var(--muted); font-family: var(--sans); font-size: 12px; }
+  .progress-cell{ display:flex; align-items:center; gap:8px; min-width:110px; }
+  .progress-track{ flex:1; height:5px; background: var(--line); border-radius:3px; overflow:hidden; }
+  .progress-fill{ height:100%; border-radius:3px; }
+  .progress-fill.local{ background: var(--local); }
+  .progress-fill.express{ background: var(--express); }
+  .empty-row td{ text-align:center; color: var(--muted); padding: 22px; font-family: var(--sans); }
+
+  /* ---- 手機窄螢幕:表格改成卡片式 ---- */
+  @media (max-width: 640px){
+    thead{ display:none; }
+    table, tbody, tr, td{ display:block; width:100%; }
+    tr{
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+    tr:last-child{ margin-bottom:0; }
+    td{ border-bottom:none; padding: 4px 0; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    td::before{
+      content: attr(data-label);
+      font-family: var(--sans); font-size: 10.5px; color: var(--muted);
+      flex-shrink:0;
+    }
+    .empty-row{ background:none; border:none; padding:0; }
+    .empty-row td{ display:block; padding: 22px; }
+    .empty-row td::before{ content:''; }
+    .progress-cell{ min-width: 0; flex:1; justify-content:flex-end; }
+  }
+
+  footer{
+    margin-top: 20px; font-size: 10.5px; color: var(--muted-2); text-align:center; line-height:1.6;
+  }
+
+  @keyframes pulse-hold{
+    0%, 100% { opacity: 1; r: 4.5; }
+    50% { opacity: 0.4; r: 6; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="title-block">
+      <h1>機場捷運 · 列車位置推算模擬</h1>
+      <div class="sub">依表定時刻表內插計算,供勤務調度參考</div>
+    </div>
+    <div class="clock">
+      <div class="time" id="clockTime">--:--:--</div>
+      <div class="status" id="serviceStatus">載入中</div>
+    </div>
+  </header>
+
+  <div class="disclaimer">
+    <b>說明</b>:本頁位置為依「表定時刻表」內插推算之模擬結果,<b>非列車即時 GPS 位置</b>。誤點、事故、施工減速等情況不會反映在畫面上,僅供勤務判斷列車大致所在區間之參考,實際案件處置仍應以現場回報或捷運公司通報為準。
+  </div>
+
+  <div class="legend" id="legendBox"></div>
+
+  <div class="panel">
+    <h2>路線示意圖(直立 · A1 台北車站 → A22 老街溪站)</h2>
+    <svg id="trackSvg" viewBox="0 0 380 100"></svg>
+  </div>
+
+  <div class="panel">
+    <h2>目前營運中列車</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>車種</th>
+          <th>方向</th>
+          <th>目前區間</th>
+          <th>區間進度</th>
+          <th>下一站</th>
+        </tr>
+      </thead>
+      <tbody id="trainTableBody"></tbody>
+    </table>
+  </div>
+
+  <footer id="footerNote">載入資料中...</footer>
+</div>
+
+<!-- 由 build-site-data.js 產生,提供真實站點/區間時間/班距資料 -->
+<script src="site-data.js"></script>
+<script>
+if (typeof SITE_DATA === 'undefined') {
+  document.querySelector('.wrap').innerHTML =
+    '<div class="disclaimer" style="border-left-color:var(--danger)">' +
+    '<b>找不到 site-data.js</b>:請先執行 tdx-tymc-fetch.js 抓資料,再執行 build-site-data.js 產生 site-data.js,' +
+    '並確認這個檔案跟本網頁放在同一個資料夾。</div>';
+  throw new Error('SITE_DATA missing');
+}
+
+/* ---------- 從 SITE_DATA 取資料 ---------- */
+const STATIONS = SITE_DATA.stations.map(s => ({
+  code: s.code, name: s.name, km: s.km,
+  hub: ['A1','A12','A13','A18'].includes(s.code), // 主要轉乘/航廈站,人工標記
+}));
+const N = STATIONS.length;
+const TOTAL_KM = STATIONS[N - 1].km;
+
+const LOCAL_SEGMENTS = SITE_DATA.localSegments.slice(); // 秒,依相鄰站序
+const EXPRESS_STOPS = SITE_DATA.expressStops.slice();
+const EXPRESS_STOP_IDX = EXPRESS_STOPS.map(c => STATIONS.findIndex(s => s.code === c));
+const EXPRESS_SEGMENTS = SITE_DATA.expressSegments.slice();
+
+const HEADWAY = SITE_DATA.headwayMins * 60;
+
+/* ---------- 普通車在特定站等候直達車追越(TDX未提供此資料,人工設定) ----------
+   使用者確認:南下、北上的普通車皆會在 A8(長庚醫院)原地停留等候直達車通過。
+   這是獨立的「停留區塊」,到站後位置固定不動,等候時間結束才繼續往下一站移動,
+   不會混進行駛時間裡。如有其他已知追越站,調整這個清單即可。 */
+const OVERTAKE_HOLDS = { 'A8': 90 }; // 站代碼 -> 等候秒數(南下、北上皆套用)
+const OVERTAKE_STATION_CODES = Object.keys(OVERTAKE_HOLDS); // 給示意圖畫⏸圖示用
+
+/* ---------- 營運時間(處理跨午夜,例如 05:30 - 00:28) ---------- */
+function toMinutes(hhmm){
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+const SERVICE_START_MIN = toMinutes(SITE_DATA.serviceStart);
+let SERVICE_END_MIN = toMinutes(SITE_DATA.serviceEnd);
+if (SERVICE_END_MIN <= SERVICE_START_MIN) SERVICE_END_MIN += 24 * 60; // 跨日
+
+/* ---------- 直立版面座標計算 ---------- */
+const svgNS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById('trackSvg');
+const VB_W = 380;
+const PAD_TOP = 46, PAD_BOTTOM = 46;
+const MIN_GAP = 44; // 相鄰站最小垂直間距(px),避免里程太近時標籤重疊
+const CENTER_X = 150;
+const RAIL_OFFSET = 13; // 兩條軌道(南下/北上)與中線的距離
+const DOWN_X = CENTER_X - RAIL_OFFSET; // 南下軌(左)
+const UP_X = CENTER_X + RAIL_OFFSET;   // 北上軌(右)
+const LABEL_X = CENTER_X + 28;
+
+// 先依真實里程比例分配一個「基準高度」,再做最小間距校正
+const BASE_HEIGHT = Math.max(N * 60, 1200);
+function rawY(idx){ return PAD_TOP + (STATIONS[idx].km / TOTAL_KM) * BASE_HEIGHT; }
+
+const stationY = new Array(N);
+stationY[0] = rawY(0);
+for (let i = 1; i < N; i++){
+  stationY[i] = Math.max(rawY(i), stationY[i-1] + MIN_GAP);
+}
+const VB_H = stationY[N-1] + PAD_BOTTOM;
+
+function stationPos(idx){ return stationY[idx]; }
+
+function drawTrack(){
+  svg.setAttribute('viewBox', `0 0 ${VB_W} ${VB_H}`);
+  svg.innerHTML = '';
+
+  // 南下軌(左,藍) / 北上軌(右,橘)
+  const downRail = document.createElementNS(svgNS, 'line');
+  downRail.setAttribute('x1', DOWN_X); downRail.setAttribute('x2', DOWN_X);
+  downRail.setAttribute('y1', PAD_TOP - 14); downRail.setAttribute('y2', stationY[N-1] + 14);
+  downRail.setAttribute('class', 'track-rail');
+  downRail.setAttribute('stroke', 'var(--down)');
+  downRail.style.opacity = 0.35;
+  svg.appendChild(downRail);
+
+  const upRail = document.createElementNS(svgNS, 'line');
+  upRail.setAttribute('x1', UP_X); upRail.setAttribute('x2', UP_X);
+  upRail.setAttribute('y1', PAD_TOP - 14); upRail.setAttribute('y2', stationY[N-1] + 14);
+  upRail.setAttribute('class', 'track-rail');
+  upRail.setAttribute('stroke', 'var(--up)');
+  upRail.style.opacity = 0.35;
+  svg.appendChild(upRail);
+
+  // 方向箭頭標示(頂端南下出發、底端北上出發)
+  function dirTag(y, text, color, anchorTop){
+    const t = document.createElementNS(svgNS, 'text');
+    t.setAttribute('x', CENTER_X); t.setAttribute('y', y);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('class', 'dir-label');
+    t.setAttribute('fill', color);
+    t.textContent = text;
+    svg.appendChild(t);
+  }
+  dirTag(PAD_TOP - 26, '▼ 南下', 'var(--down)');
+  dirTag(stationY[N-1] + 32, '▲ 北上', 'var(--up)');
+
+  STATIONS.forEach((st, i) => {
+    const y = stationPos(i);
+    const isHub = !!st.hub;
+    const dot = document.createElementNS(svgNS, 'circle');
+    dot.setAttribute('cx', CENTER_X); dot.setAttribute('cy', y);
+    dot.setAttribute('r', isHub ? 6 : 4);
+    dot.setAttribute('class', 'station-dot' + (isHub ? ' hub' : ''));
+    svg.appendChild(dot);
+
+    const label = document.createElementNS(svgNS, 'text');
+    label.setAttribute('x', LABEL_X); label.setAttribute('y', y - 3);
+    label.setAttribute('class', 'station-code');
+    label.textContent = st.code + (OVERTAKE_STATION_CODES.includes(st.code) ? ' ⏸' : '');
+    svg.appendChild(label);
+
+    const nameTxt = document.createElementNS(svgNS, 'text');
+    nameTxt.setAttribute('x', LABEL_X); nameTxt.setAttribute('y', y + 10);
+    nameTxt.setAttribute('class', 'station-name');
+    nameTxt.textContent = st.name;
+    svg.appendChild(nameTxt);
+  });
+}
+drawTrack();
+
+/* ---------- 建立時刻表(行駛區塊 + 停留區塊 交替組成) ----------
+   segTable 由一連串 block 組成:
+   - travel區塊:從一站移動到下一站,frac 依比例內插位置
+   - hold區塊:到站後原地停留(等候直達車追越),期間 frac 固定、位置不動
+   holdsMap 可選,key為站代碼、value為停留秒數;傳入時每次「抵達」該站都會插入停留區塊
+   (起點站不算抵達,不會在一開始就插入停留)。 */
+function buildSegTable(stopIdxSeq, segSeconds, holdsMap){
+  const blocks = [];
+  for (let i = 0; i < segSeconds.length; i++){
+    blocks.push({ kind: 'travel', fromIdx: stopIdxSeq[i], toIdx: stopIdxSeq[i+1], duration: segSeconds[i] });
+    const arrivedIdx = stopIdxSeq[i+1];
+    const arrivedCode = STATIONS[arrivedIdx].code;
+    const holdSec = holdsMap && holdsMap[arrivedCode];
+    if (holdSec) {
+      blocks.push({ kind: 'hold', fromIdx: arrivedIdx, toIdx: arrivedIdx, duration: holdSec });
+    }
+  }
+  const cum = [0];
+  for (const b of blocks) cum.push(cum[cum.length-1] + b.duration);
+  const total = cum[cum.length-1];
+  return {
+    total,
+    posAt(elapsed){
+      if (elapsed < 0 || elapsed > total) return null;
+      for (let i = 0; i < blocks.length; i++){
+        if (elapsed >= cum[i] && elapsed <= cum[i+1]){
+          const b = blocks[i];
+          const into = elapsed - cum[i];
+          const frac = b.kind === 'hold' ? 0 : (b.duration > 0 ? into / b.duration : 0);
+          return {
+            fromIdx: b.fromIdx,
+            toIdx: b.toIdx,
+            frac,
+            segRemain: b.duration - into,
+            holding: b.kind === 'hold',
+          };
+        }
+      }
+      return null;
+    }
+  };
+}
+
+const localSeqDown = STATIONS.map((_, i) => i);                    // 0..N-1 (A1→A22 南下)
+const localSeqUp   = localSeqDown.slice().reverse();                 // N-1..0 (A22→A1 北上)
+const localTableDown = buildSegTable(localSeqDown, LOCAL_SEGMENTS, OVERTAKE_HOLDS);
+const localTableUp   = buildSegTable(localSeqUp, LOCAL_SEGMENTS.slice().reverse(), OVERTAKE_HOLDS);
+
+const expressSeqDown = EXPRESS_STOP_IDX;
+const expressSeqUp   = EXPRESS_STOP_IDX.slice().reverse();
+const expressTableDown = buildSegTable(expressSeqDown, EXPRESS_SEGMENTS);
+const expressTableUp   = buildSegTable(expressSeqUp, EXPRESS_SEGMENTS.slice().reverse());
+
+/* ---------- 產生班次時刻表 ---------- */
+function genDepartures(){
+  const deps = [];
+  for (let min = SERVICE_START_MIN; min <= SERVICE_END_MIN; min += SITE_DATA.headwayMins){
+    deps.push(min * 60);
+  }
+  return deps;
+}
+const DEP_TIMES = genDepartures();
+
+function nowSecondsOfDay(d){
+  return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
+}
+function fmtClock(d){
+  const p = n => String(n).padStart(2,'0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function fmtMinSec(sec){
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec/60), s = sec%60;
+  return `${m}分${String(s).padStart(2,'0')}秒`;
+}
+
+/* ---------- 主更新迴圈 ---------- */
+const trainLayer = (() => {
+  const g = document.createElementNS(svgNS, 'g');
+  svg.appendChild(g);
+  return g;
+})();
+
+function computeActiveTrains(refSec){
+  const trains = [];
+  function collect(tableDown, tableUp, type, offsetSec){
+    DEP_TIMES.forEach(dep => {
+      const d = dep + offsetSec;
+      [ ['down', tableDown], ['up', tableUp] ].forEach(([dirLabel, table]) => {
+        const elapsed = refSec - d;
+        if (elapsed < 0 || elapsed > table.total) return;
+        const pos = table.posAt(elapsed);
+        if (!pos) return;
+        trains.push({ type, dir: dirLabel, fromIdx: pos.fromIdx, toIdx: pos.toIdx, frac: pos.frac, segRemain: pos.segRemain, holding: pos.holding });
+      });
+    });
+  }
+  collect(localTableDown, localTableUp, 'local', 0);
+  collect(expressTableDown, expressTableUp, 'express', (SITE_DATA.headwayMins * 60) / 2); // 兩車種交錯發車
+  return trains;
+}
+
+function render(){
+  const now = new Date();
+  document.getElementById('clockTime').textContent = fmtClock(now);
+  const nowSec = nowSecondsOfDay(now);
+  const candidates = [nowSec, nowSec + 24*3600];
+  const refSec = candidates.find(s => s >= SERVICE_START_MIN*60 && s <= SERVICE_END_MIN*60);
+  const inService = refSec !== undefined;
+
+  const statusEl = document.getElementById('serviceStatus');
+  statusEl.textContent = inService ? '營運時段' : '非營運時段';
+  statusEl.className = 'status ' + (inService ? 'on' : 'off');
+
+  trainLayer.innerHTML = '';
+  const tbody = document.getElementById('trainTableBody');
+  tbody.innerHTML = '';
+
+  if (!inService){
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">目前為非營運時段(${SITE_DATA.serviceStart}–${SITE_DATA.serviceEnd} 外),無列車運行</td></tr>`;
+    return;
+  }
+
+  const trains = computeActiveTrains(refSec);
+  if (trains.length === 0){
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">目前無推算中列車</td></tr>';
+    return;
+  }
+
+  trains.sort((a,b) => {
+    const posA = STATIONS[a.fromIdx].km + (STATIONS[a.toIdx].km - STATIONS[a.fromIdx].km) * (a.fromIdx <= a.toIdx ? a.frac : -a.frac);
+    const posB = STATIONS[b.fromIdx].km + (STATIONS[b.toIdx].km - STATIONS[b.fromIdx].km) * (b.fromIdx <= b.toIdx ? b.frac : -b.frac);
+    return posA - posB;
+  });
+
+  trains.forEach(t => {
+    const ya = stationPos(Math.min(t.fromIdx, t.toIdx));
+    const yb = stationPos(Math.max(t.fromIdx, t.toIdx));
+    const y = t.fromIdx <= t.toIdx
+      ? ya + (yb - ya) * t.frac
+      : yb - (yb - ya) * t.frac;
+    const x = t.dir === 'down' ? DOWN_X : UP_X;
+    const railColor = t.dir === 'down' ? 'var(--down)' : 'var(--up)';
+
+    // 外圈:方向色環;內點:車種色
+    const ring = document.createElementNS(svgNS, 'circle');
+    ring.setAttribute('cx', x); ring.setAttribute('cy', y);
+    ring.setAttribute('r', 7);
+    ring.setAttribute('fill', 'none');
+    ring.setAttribute('stroke', railColor);
+    ring.setAttribute('stroke-width', '2');
+    trainLayer.appendChild(ring);
+
+    const dot = document.createElementNS(svgNS, 'circle');
+    dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+    dot.setAttribute('r', 4.5);
+    dot.setAttribute('fill', t.type === 'local' ? 'var(--local)' : 'var(--express)');
+    dot.style.filter = `drop-shadow(0 0 4px ${t.type === 'local' ? '#38bdf8' : '#c084fc'})`;
+    if (t.holding) {
+      dot.style.animation = 'pulse-hold 1s ease-in-out infinite';
+    }
+    trainLayer.appendChild(dot);
+
+    const fromSt = STATIONS[t.fromIdx], toSt = STATIONS[t.toIdx];
+    const dirText = t.dir === 'down' ? '南下' : '北上';
+    const destText = t.dir === 'down' ? `${STATIONS[N-1].code} ${STATIONS[N-1].name}` : `${STATIONS[0].code} ${STATIONS[0].name}`;
+    const pct = Math.round(t.frac * 100);
+
+    const tr = document.createElement('tr');
+    if (t.holding) {
+      tr.innerHTML = `
+        <td data-label="車種"><span class="badge ${t.type}">${t.type === 'local' ? '普通車' : '直達車'}</span></td>
+        <td data-label="方向"><span class="badge dir-${t.dir}">${dirText}</span> <span class="dir">往 ${destText}</span></td>
+        <td data-label="目前區間">${fromSt.code} ${fromSt.name}(⏸ 停留等候直達車通過)</td>
+        <td data-label="區間進度"><span style="color:var(--amber)">等候中</span></td>
+        <td data-label="下一站">${fmtMinSec(t.segRemain)} 後發車</td>
+      `;
+    } else {
+      tr.innerHTML = `
+        <td data-label="車種"><span class="badge ${t.type}">${t.type === 'local' ? '普通車' : '直達車'}</span></td>
+        <td data-label="方向"><span class="badge dir-${t.dir}">${dirText}</span> <span class="dir">往 ${destText}</span></td>
+        <td data-label="目前區間">${fromSt.code} ${fromSt.name} → ${toSt.code} ${toSt.name}</td>
+        <td data-label="區間進度">
+          <div class="progress-cell">
+            <div class="progress-track"><div class="progress-fill ${t.type}" style="width:${pct}%"></div></div>
+            <span>${pct}%</span>
+          </div>
+        </td>
+        <td data-label="下一站">${fmtMinSec(t.segRemain)}</td>
+      `;
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+/* ---------- 頁首圖例、頁尾說明,依真實資料動態產生 ---------- */
+document.getElementById('legendBox').innerHTML = `
+  <span><i class="dot local"></i>普通車(每站停靠,全程約${Math.round(localTableDown.total/60)}分)</span>
+  <span><i class="dot express"></i>直達車(${EXPRESS_STOPS.length}站停靠,全程約${Math.round(expressTableDown.total/60)}分)</span>
+  <span><i class="swatch down"></i>南下</span>
+  <span><i class="swatch up"></i>北上</span>
+`;
+document.getElementById('footerNote').textContent =
+  `列車班距以${SITE_DATA.headwayMins}分鐘一班推算 · 營運時間 ${SITE_DATA.serviceStart}–${SITE_DATA.serviceEnd} · 資料來源:TDX(產生於 ${new Date(SITE_DATA.generatedAt).toLocaleString('zh-TW')})`;
+
+render();
+setInterval(render, 1000);
+</script>
+</body>
+</html>
