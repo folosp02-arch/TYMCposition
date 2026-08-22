@@ -237,14 +237,11 @@ const HEADWAY = SITE_DATA.headwayMins * 60;
 const OVERTAKE_HOLDS = { 'A8': 90 }; // 站代碼 -> 等候秒數(南下、北上皆套用)
 const OVERTAKE_STATION_CODES = Object.keys(OVERTAKE_HOLDS); // 給示意圖畫⏸圖示用
 
-/* ---------- 營運時間(處理跨午夜,例如 05:30 - 00:28) ---------- */
-function toMinutes(hhmm){
-  const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
-}
-const SERVICE_START_MIN = toMinutes(SITE_DATA.serviceStart);
-let SERVICE_END_MIN = toMinutes(SITE_DATA.serviceEnd);
-if (SERVICE_END_MIN <= SERVICE_START_MIN) SERVICE_END_MIN += 24 * 60; // 跨日
+/* ---------- 南下/北上各自獨立的營運時間(來自firstLastTimetable真實資料) ---------- */
+const DOWN_START_MIN = SITE_DATA.directions.down.startMin;
+const DOWN_END_MIN   = SITE_DATA.directions.down.endMin;
+const UP_START_MIN   = SITE_DATA.directions.up.startMin;
+const UP_END_MIN     = SITE_DATA.directions.up.endMin;
 
 /* ---------- 直立版面座標計算 ---------- */
 const svgNS = "http://www.w3.org/2000/svg";
@@ -334,7 +331,9 @@ drawTrack();
    - travel區塊:從一站移動到下一站,frac 依比例內插位置
    - hold區塊:到站後原地停留(等候直達車追越),期間 frac 固定、位置不動
    holdsMap 可選,key為站代碼、value為停留秒數;傳入時每次「抵達」該站都會插入停留區塊
-   (起點站不算抵達,不會在一開始就插入停留)。 */
+   (起點站不算抵達,不會在一開始就插入停留)。
+   同時建立 stops 清單:每一站的到站/發車累積秒數(相對於本班車出發時刻),
+   供之後展開「這班車完整逐站時刻」使用。 */
 function buildSegTable(stopIdxSeq, segSeconds, holdsMap){
   const blocks = [];
   for (let i = 0; i < segSeconds.length; i++){
@@ -349,8 +348,28 @@ function buildSegTable(stopIdxSeq, segSeconds, holdsMap){
   const cum = [0];
   for (const b of blocks) cum.push(cum[cum.length-1] + b.duration);
   const total = cum[cum.length-1];
+
+  // 逐站到站/發車累積秒數
+  const stops = [{ stationIdx: stopIdxSeq[0], arrival: 0, departure: 0 }];
+  let cursor = 0;
+  for (let i = 0; i < blocks.length; i++){
+    const b = blocks[i];
+    if (b.kind === 'travel'){
+      cursor += b.duration;
+      const next = blocks[i+1];
+      const hasHold = next && next.kind === 'hold' && next.fromIdx === b.toIdx;
+      stops.push({
+        stationIdx: b.toIdx,
+        arrival: cursor,
+        departure: hasHold ? cursor + next.duration : cursor,
+      });
+      if (hasHold) cursor += next.duration;
+    }
+  }
+
   return {
     total,
+    stops,
     posAt(elapsed){
       if (elapsed < 0 || elapsed > total) return null;
       for (let i = 0; i < blocks.length; i++){
@@ -382,15 +401,16 @@ const expressSeqUp   = EXPRESS_STOP_IDX.slice().reverse();
 const expressTableDown = buildSegTable(expressSeqDown, EXPRESS_SEGMENTS);
 const expressTableUp   = buildSegTable(expressSeqUp, EXPRESS_SEGMENTS.slice().reverse());
 
-/* ---------- 產生班次時刻表 ---------- */
-function genDepartures(){
+/* ---------- 產生班次時刻表(南下/北上各自獨立起訖時間) ---------- */
+function genDepartures(startMin, endMin, headwayMins){
   const deps = [];
-  for (let min = SERVICE_START_MIN; min <= SERVICE_END_MIN; min += SITE_DATA.headwayMins){
+  for (let min = startMin; min <= endMin; min += headwayMins){
     deps.push(min * 60);
   }
   return deps;
 }
-const DEP_TIMES = genDepartures();
+const DEP_TIMES_DOWN = genDepartures(DOWN_START_MIN, DOWN_END_MIN, SITE_DATA.headwayMins);
+const DEP_TIMES_UP   = genDepartures(UP_START_MIN, UP_END_MIN, SITE_DATA.headwayMins);
 
 function nowSecondsOfDay(d){
   return d.getHours()*3600 + d.getMinutes()*60 + d.getSeconds();
@@ -415,15 +435,21 @@ const trainLayer = (() => {
 function computeActiveTrains(refSec){
   const trains = [];
   function collect(tableDown, tableUp, type, offsetSec){
-    DEP_TIMES.forEach(dep => {
+    DEP_TIMES_DOWN.forEach(dep => {
       const d = dep + offsetSec;
-      [ ['down', tableDown], ['up', tableUp] ].forEach(([dirLabel, table]) => {
-        const elapsed = refSec - d;
-        if (elapsed < 0 || elapsed > table.total) return;
-        const pos = table.posAt(elapsed);
-        if (!pos) return;
-        trains.push({ type, dir: dirLabel, fromIdx: pos.fromIdx, toIdx: pos.toIdx, frac: pos.frac, segRemain: pos.segRemain, holding: pos.holding });
-      });
+      const elapsed = refSec - d;
+      if (elapsed < 0 || elapsed > tableDown.total) return;
+      const pos = tableDown.posAt(elapsed);
+      if (!pos) return;
+      trains.push({ type, dir: 'down', dep: d, table: tableDown, fromIdx: pos.fromIdx, toIdx: pos.toIdx, frac: pos.frac, segRemain: pos.segRemain, holding: pos.holding });
+    });
+    DEP_TIMES_UP.forEach(dep => {
+      const d = dep + offsetSec;
+      const elapsed = refSec - d;
+      if (elapsed < 0 || elapsed > tableUp.total) return;
+      const pos = tableUp.posAt(elapsed);
+      if (!pos) return;
+      trains.push({ type, dir: 'up', dep: d, table: tableUp, fromIdx: pos.fromIdx, toIdx: pos.toIdx, frac: pos.frac, segRemain: pos.segRemain, holding: pos.holding });
     });
   }
   collect(localTableDown, localTableUp, 'local', 0);
@@ -431,13 +457,26 @@ function computeActiveTrains(refSec){
   return trains;
 }
 
+/* 依「這班車出發時的絕對時刻」+ 相對秒數,換算成真正的時鐘時間(Date) */
+function refDayBaseMs(refSec, nowSec, now){
+  const todayMidnightMs = now.getTime() - nowSec * 1000;
+  return refSec === nowSec ? todayMidnightMs : todayMidnightMs - 24*3600*1000;
+}
+function fmtHMS(date){
+  const p = n => String(n).padStart(2,'0');
+  return `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
+}
+
 function render(){
   const now = new Date();
   document.getElementById('clockTime').textContent = fmtClock(now);
   const nowSec = nowSecondsOfDay(now);
+  const unionStartSec = Math.min(DOWN_START_MIN, UP_START_MIN) * 60;
+  const unionEndSec = Math.max(DOWN_END_MIN, UP_END_MIN) * 60;
   const candidates = [nowSec, nowSec + 24*3600];
-  const refSec = candidates.find(s => s >= SERVICE_START_MIN*60 && s <= SERVICE_END_MIN*60);
+  const refSec = candidates.find(s => s >= unionStartSec && s <= unionEndSec);
   const inService = refSec !== undefined;
+  const dayBaseMs = inService ? refDayBaseMs(refSec, nowSec, now) : null;
 
   const statusEl = document.getElementById('serviceStatus');
   statusEl.textContent = inService ? '營運時段' : '非營運時段';
@@ -448,7 +487,7 @@ function render(){
   tbody.innerHTML = '';
 
   if (!inService){
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">目前為非營運時段(${SITE_DATA.serviceStart}–${SITE_DATA.serviceEnd} 外),無列車運行</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="5">目前為非營運時段(南下 ${SITE_DATA.directions.down.startLabel}–${SITE_DATA.directions.down.endLabel} / 北上 ${SITE_DATA.directions.up.startLabel}–${SITE_DATA.directions.up.endLabel} 外),無列車運行</td></tr>`;
     return;
   }
 
@@ -520,8 +559,49 @@ function render(){
         <td data-label="下一站">${fmtMinSec(t.segRemain)}</td>
       `;
     }
+    tr.style.cursor = 'pointer';
+    tr.title = '點擊展開這班車的完整逐站時刻';
+    tr.addEventListener('click', () => toggleSchedule(tr, t, dayBaseMs));
     tbody.appendChild(tr);
   });
+}
+
+/* ---------- 點擊列車列,展開/收合這班車完整的逐站到站/發車時刻 ---------- */
+function toggleSchedule(tr, t, dayBaseMs){
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('schedule-row')) {
+    existing.remove();
+    return;
+  }
+  // 先收掉其他已展開的列,一次只看一班車
+  document.querySelectorAll('.schedule-row').forEach(el => el.remove());
+
+  const depAbsMs = dayBaseMs + t.dep * 1000;
+  const rows = t.table.stops.map(s => {
+    const st = STATIONS[s.stationIdx];
+    const arrivalTime = fmtHMS(new Date(depAbsMs + s.arrival * 1000));
+    const departureTime = fmtHMS(new Date(depAbsMs + s.departure * 1000));
+    const isCurrent = s.stationIdx === t.fromIdx || s.stationIdx === t.toIdx;
+    const timeText = s.arrival === s.departure
+      ? departureTime
+      : `到 ${arrivalTime} / 開 ${departureTime}`;
+    return `<div style="display:flex; justify-content:space-between; gap:10px; padding:4px 0; ${isCurrent ? 'color:var(--amber); font-weight:600;' : ''}">
+      <span>${st.code} ${st.name}${OVERTAKE_HOLDS[st.code] ? ' ⏸' : ''}</span>
+      <span style="font-family:var(--mono)">${timeText}</span>
+    </div>`;
+  }).join('');
+
+  const detailTr = document.createElement('tr');
+  detailTr.className = 'schedule-row';
+  const cell = document.createElement('td');
+  cell.colSpan = 5;
+  cell.setAttribute('data-label', '');
+  cell.style.background = 'var(--bg)';
+  cell.style.borderRadius = '6px';
+  cell.style.padding = '10px 12px';
+  cell.innerHTML = `<div style="font-size:10.5px; color:var(--muted); margin-bottom:6px;">此班車完整逐站時刻(依表定時刻表推算)</div>${rows}`;
+  detailTr.appendChild(cell);
+  tr.after(detailTr);
 }
 
 /* ---------- 頁首圖例、頁尾說明,依真實資料動態產生 ---------- */
@@ -532,7 +612,7 @@ document.getElementById('legendBox').innerHTML = `
   <span><i class="swatch up"></i>北上</span>
 `;
 document.getElementById('footerNote').textContent =
-  `列車班距以${SITE_DATA.headwayMins}分鐘一班推算 · 營運時間 ${SITE_DATA.serviceStart}–${SITE_DATA.serviceEnd} · 資料來源:TDX(產生於 ${new Date(SITE_DATA.generatedAt).toLocaleString('zh-TW')})`;
+  `列車班距以${SITE_DATA.headwayMins}分鐘一班推算 · 南下 ${SITE_DATA.directions.down.startLabel}–${SITE_DATA.directions.down.endLabel} · 北上 ${SITE_DATA.directions.up.startLabel}–${SITE_DATA.directions.up.endLabel} · 點擊列車列可展開逐站時刻 · 資料來源:TDX(產生於 ${new Date(SITE_DATA.generatedAt).toLocaleString('zh-TW')})`;
 
 render();
 setInterval(render, 1000);
