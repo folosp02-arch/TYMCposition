@@ -1,7 +1,7 @@
 // 由 build-site-data.js 自動產生,請勿手動編輯
-// 產生時間: 2026-08-22T13:34:52.223Z
+// 產生時間: 2026-08-23T19:16:00.168Z
 const SITE_DATA = {
-  "generatedAt": "2026-08-22T13:34:52.223Z",
+  "generatedAt": "2026-08-23T19:16:00.168Z",
   "stations": [
     {
       "code": "A1",
@@ -177,18 +177,6 @@ const SITE_DATA = {
     600
   ],
   "headwayMins": 15,
-  "directions": {
-    "down": {
-      "startMin": 330,
-      "endMin": 1418,
-      "startLabel": "05:30",
-      "endLabel": "23:38"
-    },
-    "up": {
-      "startMin": 333,
-      "endMin": 1430,
-      "startLabel": "05:33",
-      "endLabel": "23:50"
-    }
-  }
+  "serviceStart": "05:30",
+  "serviceEnd": "00:28"
 };
