@@ -1,7 +1,7 @@
 // 由 build-site-data.js 自動產生,請勿手動編輯
-// 產生時間: 2026-10-04T22:06:15.185Z
+// 產生時間: 2026-10-11T22:35:03.215Z
 const SITE_DATA = {
-  "generatedAt": "2026-10-04T22:06:15.185Z",
+  "generatedAt": "2026-10-11T22:35:03.215Z",
   "stations": [
     {
       "code": "A1",
